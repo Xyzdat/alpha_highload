@@ -223,7 +223,7 @@ GeoDNS — механизм, при котором DNS возвращает IP-�
 
 Пусть 50% запросов — новые TLS-соединения:
 
-316 RPS × 0.5 ≈ 158 CPS
+116 RPS × 0.5 ≈ 59 CPS
 
 Согласно тестам NGINX: средний CPS сервера = 6676, а у нас всего 158 CPS, что значительно меньше чем 6000–10000, то можно прийти к вывожу что нам хватит и **1 сервера**. [NGNIX CPS](https://blog.nginx.org/blog/testing-the-performance-of-nginx-and-nginx-plus-web-servers#:~:text=32%20to%C2%A036.-,CPS%20for%20HTTPS%20Requests,-The%20table%20and)
 
