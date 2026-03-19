@@ -127,7 +127,6 @@ DAU была расчитана, как 20-40% пользователей.
 | private.auth.alfabank.ru | Сервисы аутентификации |
 | ipoteka.alfabank.ru      |     Альфа‑Ипотека      |
 | my.alfabank.ru           |      Альфа-Кредит      |
-| api.alfabank.ru          |        Alfa API        |
 
 ## Обоснования расположения ДЦ
 
