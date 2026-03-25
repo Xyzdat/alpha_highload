@@ -244,6 +244,57 @@ DAU была расчитана, как 20-40% пользователей.
 
 Основной ключ шардинга: `user_id`, что помогает раномерно распределить данные пользователей.
 
+# Физическая схема БД
+
+## Выбор СУБД (потаблично)
+
+| Таблица       | СУБД                   | Схема шардирования | Денормализация                                |
+| ------------- | ---------------------- | ------------------ | --------------------------------------------- |
+| users         | PostgreSQL             | `user_id`          | нет                                           |
+| accounts      | PostgreSQL             | `user_id`          | Поле `last_transaction_id` для быстрой сверки |
+| transactions  | PostgreSQL (sharded)   | `from_account_id`  | `sender_name`, `receiver_name`                |
+| credits       | PostgreSQL             | `user_id`          | Нет                                           |
+| notifications | Cassandra / ClickHouse | `user_id`          | Весь JSON полезной нагрузки в `payload`       |
+| sessions      | Cassandra / ClickHouse | `user_id`          | нет                                           |
+
+---
+
+## Индексы
+
+### users
+
+- PRIMARY KEY (id)
+- UNIQUE INDEX (email)
+
+### accounts
+
+- PRIMARY KEY (id)
+- INDEX (user_id)
+
+### transactions
+
+- PRIMARY KEY (id)
+- INDEX (from_account)
+- INDEX (to_account)
+- INDEX (created_at)
+
+### credits
+
+- PRIMARY KEY (id)
+- INDEX (user_id)
+
+### notifications
+
+- PRIMARY KEY (id)
+- INDEX (user_id)
+- INDEX (created_at)
+
+## Выбор СУБД(потаблично)
+
+- PostgreSQL (Users, Accounts, Credits, Transactions): Нужна строгая ACID-консистентность для балансов и личных данных.
+- Cassandra (Notifications): Идеально для огромных объемов и высокой скорости записи. Eventual consistency здесь допустима.
+- Redis (Sessions): Минимальная задержка для проверки авторизации при каждом запросе.
+
 # Использованные источники
 
 - https://ru.wikipedia.org/wiki/%D0%90%D0%BB%D1%8C%D1%84%D0%B0-%D0%B1%D0%B0%D0%BD%D0%BA#:~:text=%D0%90%D0%BB%D1%8C%D1%84%D0%B0%2D%D0%B1%D0%B0%D0%BD%D0%BA%20%D0%B2%D1%85%D0%BE%D0%B4%D0%B8%D1%82,13%5D.
