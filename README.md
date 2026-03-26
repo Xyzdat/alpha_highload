@@ -222,18 +222,19 @@ DAU была расчитана, как 20-40% пользователей.
 
 # Логическая схема БД
 
-![логическая схема бд](./img/бд1.png)
+![логическая схема бд](./img/db_logic.png)
 
 ## Таблица с описанием таблиц
 
-| Таблица       | Назначение   | Основные поля                                                                                                             | Размер строки | Кол-во строк | Размер таблицы | Запись (QPS)           | Чтение (QPS)                   |
-| ------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------ | -------------- | ---------------------- | ------------------------------ |
-| users         | Пользователи | id(16), name(100), email(100), password_hash(250), phone_number(65), avatar_url(100), role(50), status(50),timestamps(48) | ~450 Б        | 36 млн       | ~16 ГБ         | Регистрация            | Чтение при заходе на странички |
-| accounts      | Счета        | id(16), user_id, balance, currency, status, account_type                                                                  | ~150 Б        | 72 млн       | ~10 ГБ         | 3 900 000 / 86400 ≈ 45 | ~45                            |
-| transactions  | Транзакции   | id(16), from_account_id, to_account_id, amount, status, type, commission                                                  | ~150 Б        | 33 млрд      | ~5 ТБ          | ~45                    | 1 950 000 / 86400 = 23         |
-| credits       | Кредиты      | id(16), user_id, status, interest_rate, total_debt, term_months                                                           | ~120 Б        | 180 млн      | ~20 ГБ         | 39 000 / 86400 = 0.5   | ~1                             |
-| notifications | Уведомления  | id(16), user_id, payload, status, type, read_at                                                                           | ~2 КБ         | 20 млрд      | ~80 ТБ         | ~45                    | ~45                            |
-| sessions      | Сессии       | id(16), user_id, token, device_id, ip_address, expires_at                                                                 | ~200 Б        | 200 млн      | ~40 ГБ         | ~100                   | ~100                           |
+| Таблица       | Назначение       | Основные поля                                                                                                             | Размер строки | Кол-во строк | Размер таблицы | Запись (QPS)           | Чтение (QPS)                   |
+| ------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------ | -------------- | ---------------------- | ------------------------------ |
+| users         | Пользователи     | id(16), name(100), email(100), password_hash(250), phone_number(65), avatar_url(100), role(50), status(50),timestamps(48) | ~450 Б        | 36 млн       | ~16 ГБ         | Регистрация            | Чтение при заходе на странички |
+| accounts      | Счета            | id(16), user_id, balance, currency, status, account_type                                                                  | ~150 Б        | 72 млн       | ~10 ГБ         | 3 900 000 / 86400 ≈ 45 | ~45                            |
+| transactions  | Транзакции       | id(16), from_account_id, to_account_id, amount, status, type, commission                                                  | ~150 Б        | 33 млрд      | ~5 ТБ          | ~45                    | 1 950 000 / 86400 = 23         |
+| credits       | Кредиты          | id(16), user_id, status, interest_rate, total_debt, term_months                                                           | ~120 Б        | 180 млн      | ~20 ГБ         | 39 000 / 86400 = 0.5   | ~1                             |
+| notifications | Уведомления      | id(16), user_id, payload, status, type, read_at                                                                           | ~2 КБ         | 20 млрд      | ~80 ТБ         | ~45                    | ~45                            |
+| sessions      | Сессии           | id(16), user_id, token, device_id, ip_address, expires_at                                                                 | ~200 Б        | 200 млн      | ~40 ГБ         | ~100                   | ~100                           |
+| cards         | Банковские карты | id, user_id, account_id, card_number_hash, last4, card_type, payment_system, expiration_date, status                      | ~400 Б        | 72 млн       | ~28 ГБ         | ~45                    | ~45                            |
 
 ## Требования к консистентности
 
@@ -243,6 +244,7 @@ DAU была расчитана, как 20-40% пользователей.
 | transactions           | sessions                 |
 | accounts               |                          |
 | credits                |                          |
+| cards                  |                          |
 
 ## Оссобенности нагрузки
 
@@ -250,18 +252,19 @@ DAU была расчитана, как 20-40% пользователей.
 
 # Физическая схема БД
 
-![логическая схема бд](./img/бд1.png)
+![логическая схема бд](./img/db_fiz.png)
 
 ## Выбор СУБД (потаблично)
 
-| Таблица       | СУБД       | Схема шардирования        | Резервирование     |
-| ------------- | ---------- | ------------------------- | ------------------ |
-| users         | PostgreSQL | Hash по `id`              | Master-Slave       |
-| accounts      | PostgreSQL | Hash по `user_id`         | Master-Slave       |
-| transactions  | PostgreSQL | Hash по `from_account_id` | Master-Slave       |
-| credits       | PostgreSQL | Hash по `user_id`         | Master-Slave       |
-| notifications | Cassandra  | Partition Key: `user_id`  | Replication Factor |
-| sessions      | Redis      | `user_id`                 | Master-Slave       |
+| Таблица       | СУБД       | Схема шардирования       | Резервирование     |
+| ------------- | ---------- | ------------------------ | ------------------ |
+| users         | PostgreSQL | нет                      | Master-Slave       |
+| accounts      | PostgreSQL | нет                      | Master-Slave       |
+| transactions  | PostgreSQL | Hash по `user_id`        | Master-Slave       |
+| credits       | PostgreSQL | нет                      | Master-Slave       |
+| notifications | Cassandra  | Partition Key: `user_id` | Replication Factor |
+| sessions      | Redis      | нет                      | Master-Slave       |
+| cards         | PostgreSQL | нет                      | Master-Slave       |
 
 ## Обоснование конфигураций
 
@@ -290,11 +293,13 @@ DAU была расчитана, как 20-40% пользователей.
 |                   | `(user_id, created_at DESC) `     | Composite Key  |
 | **sessions**      | `id`                              | PRIMARY KEY    |
 |                   | `user_id`                         | B-Tree(FK)     |
+| cards             | `id`                              | PRIMARY KEY    |
+|                   | `user_id`                         | B-Tree         |
+|                   | `account_id`                      | B-Tree         |
 
 ## Денормализация
 
-1. **Баланс в `accounts`**: Храним агрегированное значение. Обновляется атомарно при транзакции. Избавляет от необходимости суммировать миллионы строк транзакций для получения остатка.
-2. **Имена в `transactions`**: При создании транзакции копируем туда `sender_name` и `receiver_name`. Это позволяет отображать историю операций без JOIN-ов с таблицей пользователей, что критично при распределенной БД.
+1. **Имена в `transactions`**: При создании транзакции копируем туда `sender_name` и `receiver_name`. Это позволяет отображать историю операций без JOIN-ов с таблицей пользователей, что критично при распределенной БД.
 
 ## Балансировка запросов и мультиплексирование
 
