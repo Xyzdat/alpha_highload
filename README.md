@@ -252,14 +252,14 @@ DAU была расчитана, как 20-40% пользователей.
 
 ## Выбор СУБД (потаблично)
 
-| Таблица       | СУБД       | Схема шардирования        | Денормализация                     | Резервирование     |
-| ------------- | ---------- | ------------------------- | ---------------------------------- | ------------------ |
-| users         | PostgreSQL | Hash по `id`              | нет                                | Master-Slave       |
-| accounts      | PostgreSQL | Hash по `user_id`         | `last_transaction_id`              | Master-Slave       |
-| transactions  | PostgreSQL | Hash по `from_account_id` | `from_account_id`, `to_account_id` | Quorum Replication |
-| credits       | PostgreSQL | Hash по `user_id`         | Нет                                | Master-Slave       |
-| notifications | Cassandra  | Partition Key: `user_id`  | Весь JSON в `payload`              | Replication Factor |
-| sessions      | Redis      | `user_id`                 | нет                                | Master-Slave       |
+| Таблица       | СУБД       | Схема шардирования        | Резервирование     |
+| ------------- | ---------- | ------------------------- | ------------------ |
+| users         | PostgreSQL | Hash по `id`              | Master-Slave       |
+| accounts      | PostgreSQL | Hash по `user_id`         | Master-Slave       |
+| transactions  | PostgreSQL | Hash по `from_account_id` | Master-Slave       |
+| credits       | PostgreSQL | Hash по `user_id`         | Master-Slave       |
+| notifications | Cassandra  | Partition Key: `user_id`  | Replication Factor |
+| sessions      | Redis      | `user_id`                 | Master-Slave       |
 
 ## Обоснование конфигураций
 
@@ -309,9 +309,9 @@ DAU была расчитана, как 20-40% пользователей.
 
 - **Шардирование**: Используем `user_id` как основной ключ. Это гарантирует, что все данные одного пользователя лежат на одном узле, что позволяет делать быстрые ACID-транзакции внутри одного шардированного узла.
 - **Резервирование**:
-  - PostgreSQL: Схема Quorum Synchronous Replication (1 Master + 2 Synchronous Replicas). Даже при падении мастера данные гарантированно сохранены на одной из реплик.
-  - Cassandra: Replication Factor = 3 (запись в 3 ДЦ).
-  - Redis: Redis Sentinel для автоматического failover.
+  - PostgreSQL: Кворумная синхронная репликация(Quorum Synchronous Replication). Метод обеспечения высокой надежности данных, при котором транзакция считается успешной только после подтверждения ее записи мастером и кворумом (большинством) реплик, а не всеми узлами. Даже при падении мастера данные гарантированно сохранены на одной из реплик.
+  - Cassandra: процесс создания снимков данных (snapshots) и инкрементальных копий для защиты от потери информации.
+  - Redis: Redis Sentinel для автоматического переключения на реплику failover.
 
 ## Схема резервного копирования
 
