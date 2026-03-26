@@ -248,52 +248,78 @@ DAU была расчитана, как 20-40% пользователей.
 
 ## Выбор СУБД (потаблично)
 
-| Таблица       | СУБД                   | Схема шардирования | Денормализация                                |
-| ------------- | ---------------------- | ------------------ | --------------------------------------------- |
-| users         | PostgreSQL             | `user_id`          | нет                                           |
-| accounts      | PostgreSQL             | `user_id`          | Поле `last_transaction_id` для быстрой сверки |
-| transactions  | PostgreSQL (sharded)   | `from_account_id`  | `sender_name`, `receiver_name`                |
-| credits       | PostgreSQL             | `user_id`          | Нет                                           |
-| notifications | Cassandra / ClickHouse | `user_id`          | Весь JSON полезной нагрузки в `payload`       |
-| sessions      | Cassandra / ClickHouse | `user_id`          | нет                                           |
+| Таблица       | СУБД       | Схема шардирования        | Денормализация                     | Резервирование     |
+| ------------- | ---------- | ------------------------- | ---------------------------------- | ------------------ |
+| users         | PostgreSQL | Hash по `id`              | нет                                | Master-Slave       |
+| accounts      | PostgreSQL | Hash по `user_id`         | `last_transaction_id`              | Master-Slave       |
+| transactions  | PostgreSQL | Hash по `from_account_id` | `from_account_id`, `to_account_id` | Quorum Replication |
+| credits       | PostgreSQL | Hash по `user_id`         | Нет                                | Master-Slave       |
+| notifications | Cassandra  | Partition Key: `user_id`  | Весь JSON в `payload`              | Replication Factor |
+| sessions      | Redis      | `user_id`                 | нет                                | Master-Slave       |
+
+## Обоснование конфигураций
+
+- **PostgreSQL**: Выбран для критических данных (счета, балансы). Гарантирует ACID и строгую консистентность.
+- **Cassandra**: Выбрана для уведомлений (80 ТБ данных). Позволяет линейно масштабировать запись и хранить огромные объемы с TTL.
+- **Redis**: Используется для мгновенной проверки сессий .
 
 ---
 
 ## Индексы
 
-### users
+| Таблица           | Поле                              | Тип индекса    |
+| ----------------- | --------------------------------- | -------------- |
+| **users**         | `id`                              | PRIMARY KEY    |
+|                   | `email`                           | B-Tree         |
+|                   | `phone_number`                    | B-Tree         |
+| **accounts**      | `id`                              | PRIMARY KEY    |
+|                   | `user_id`                         | B-Tree(FK)     |
+| **transactions**  | `id`                              | PRIMARY KEY    |
+|                   | `(from_account, created_at DESC)` | Composite Key  |
+|                   | `(to_account, created_at DESC)  ` | Composite Key  |
+| **credits**       | `id`                              | PRIMARY KEY    |
+|                   | `user_id`                         | B-Tree(FK)     |
+| **notifications** | `id`                              | Clustering Key |
+|                   | `user_id`                         | Partition key  |
+|                   | `(user_id, created_at DESC) `     | Composite Key  |
+| **sessions**      | `id`                              | PRIMARY KEY    |
+|                   | `user_id`                         | B-Tree(FK)     |
 
-- PRIMARY KEY (id)
-- UNIQUE INDEX (email)
+## Клиентские библиотеки / интеграции
 
-### accounts
+- **Библиотеки**:
+  - Golang: `pgx` (Postgres) с поддержкой пула соединений, `gocql` (Cassandra), `go-redis`.
+- **Интеграции**:
+  - Использование **CDC (Change Data Capture)** через Debezium. При обновлении баланса в Postgres, событие летит в Kafka для обновления кэшей и отправки пушей.
 
-- PRIMARY KEY (id)
-- INDEX (user_id)
+## Балансировка запросов и мультиплексирование
 
-### transactions
+- **PgBouncer**: Установлен перед PostgreSQL в режиме `transaction pooling`. Мультиплексирует тысячи клиентских соединений в 100-200 реальных соединений к инстансу БД, экономя память.
+- **HAProxy**: Балансирует Read-Only запросы между репликами PostgreSQL.
 
-- PRIMARY KEY (id)
-- INDEX (from_account)
-- INDEX (to_account)
-- INDEX (created_at)
+## Денормализация
 
-### credits
+1. **Баланс в `accounts`**: Храним агрегированное значение. Обновляется атомарно при транзакции. Избавляет от необходимости суммировать миллионы строк транзакций для получения остатка.
+2. **Имена в `transactions`**: При создании транзакции копируем туда `sender_name` и `receiver_name`. Это позволяет отображать историю операций без JOIN-ов с таблицей пользователей, что критично при распределенной БД.
 
-- PRIMARY KEY (id)
-- INDEX (user_id)
+## Шардирование и Резервирование
 
-### notifications
+- **Шардирование**: Используем `user_id` как основной ключ. Это гарантирует, что все данные одного пользователя лежат на одном узле, что позволяет делать быстрые ACID-транзакции внутри одного шардированного узла.
+- **Резервирование**:
+  - PostgreSQL: Схема Quorum Synchronous Replication (1 Master + 2 Synchronous Replicas). Даже при падении мастера данные гарантированно сохранены на одной из реплик.
+  - Cassandra: Replication Factor = 3 (запись в 3 ДЦ).
+  - Redis: Redis Sentinel для автоматического failover.
 
-- PRIMARY KEY (id)
-- INDEX (user_id)
-- INDEX (created_at)
+## Схема резервного копирования
 
-## Выбор СУБД(потаблично)
-
-- PostgreSQL (Users, Accounts, Credits, Transactions): Нужна строгая ACID-консистентность для балансов и личных данных.
-- Cassandra (Notifications): Идеально для огромных объемов и высокой скорости записи. Eventual consistency здесь допустима.
-- Redis (Sessions): Минимальная задержка для проверки авторизации при каждом запросе.
+- **PostgreSQL**:
+  - Непрерывное архивирование WAL-логов через **WAL-G** в S3.
+  - Позволяет восстановить базу на любой момент времени.
+  - Еженедельный Full Backup.
+- **Cassandra**:
+  - Ежедневные инкрементальные снапшоты с каждой ноды.
+- **Проверка**:
+  - Ежемесячное тестовое восстановление из бэкапов для подтверждения целостности данных.
 
 # Использованные источники
 
