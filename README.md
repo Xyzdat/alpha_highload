@@ -256,15 +256,15 @@ DAU была расчитана, как 20-40% пользователей.
 
 ## Выбор СУБД (потаблично)
 
-| Таблица       | СУБД       | Схема шардирования       | Резервирование     |
-| ------------- | ---------- | ------------------------ | ------------------ |
-| users         | PostgreSQL | нет                      | Master-Slave       |
-| accounts      | PostgreSQL | нет                      | Master-Slave       |
-| transactions  | PostgreSQL | Hash по `user_id`        | Master-Slave       |
-| credits       | PostgreSQL | нет                      | Master-Slave       |
-| notifications | Cassandra  | Partition Key: `user_id` | Replication Factor |
-| sessions      | Redis      | нет                      | Master-Slave       |
-| cards         | PostgreSQL | нет                      | Master-Slave       |
+| Таблица       | СУБД       | Схема шардирования | Резервирование     |
+| ------------- | ---------- | ------------------ | ------------------ |
+| users         | PostgreSQL | нет                | Master-Slave       |
+| accounts      | PostgreSQL | нет                | Master-Slave       |
+| transactions  | PostgreSQL | `from_account_id`  | Master-Slave       |
+| credits       | PostgreSQL | нет                | Master-Slave       |
+| notifications | Cassandra  | `user_id`          | Replication Factor |
+| sessions      | Redis      | нет                | Master-Slave       |
+| cards         | PostgreSQL | нет                | Master-Slave       |
 
 ## Обоснование конфигураций
 
@@ -276,26 +276,31 @@ DAU была расчитана, как 20-40% пользователей.
 
 ## Индексы
 
-| Таблица           | Поле                              | Тип индекса    |
-| ----------------- | --------------------------------- | -------------- |
-| **users**         | `id`                              | PRIMARY KEY    |
-|                   | `email`                           | B-Tree         |
-|                   | `phone_number`                    | B-Tree         |
-| **accounts**      | `id`                              | PRIMARY KEY    |
-|                   | `user_id`                         | B-Tree(FK)     |
-| **transactions**  | `id`                              | PRIMARY KEY    |
-|                   | `(from_account, created_at DESC)` | Composite Key  |
-|                   | `(to_account, created_at DESC)  ` | Composite Key  |
-| **credits**       | `id`                              | PRIMARY KEY    |
-|                   | `user_id`                         | B-Tree(FK)     |
-| **notifications** | `id`                              | Clustering Key |
-|                   | `user_id`                         | Partition key  |
-|                   | `(user_id, created_at DESC) `     | Composite Key  |
-| **sessions**      | `id`                              | PRIMARY KEY    |
-|                   | `user_id`                         | B-Tree(FK)     |
-| cards             | `id`                              | PRIMARY KEY    |
-|                   | `user_id`                         | B-Tree         |
-|                   | `account_id`                      | B-Tree         |
+| Таблица           | Поле                              | Тип индекса    | Размер индексов                                |
+| ----------------- | --------------------------------- | -------------- | ---------------------------------------------- |
+| **users**         | `id`                              | PRIMARY KEY    | (16 + 8) × 36M × 1.3 ≈ 24 × 36M × 1.3≈ 1.12 ГБ |
+|                   | `email`                           | B-Tree         | 108 × 36M × 1.3 ≈ 5.05 ГБ                      |
+|                   | `phone_number`                    | B-Tree         | 73 × 36M × 1.3 ≈ 3.4 ГБ                        |
+| **accounts**      | `id`                              | PRIMARY KEY    | 24 × 72M × 1.3 ≈ 2.2 ГБ                        |
+|                   | `user_id`                         | B-Tree(FK)     | 24 × 72M × 1.3 ≈ 2.2 ГБ                        |
+| **transactions**  | `id`                              | PRIMARY KEY    | 24 × 33B × 1.3 ≈ 1 ТБ                          |
+|                   | `(from_account, created_at DESC)` | Composite Key  | 32 × 33B × 1.3 ≈ 1.37 ТБ                       |
+|                   | `(to_account, created_at DESC)  ` | Composite Key  | 32 × 33B × 1.3 ≈ 1.37 ТБ                       |
+| **credits**       | `id`                              | PRIMARY KEY    | 5.6 ГБ                                         |
+|                   | `user_id`                         | B-Tree(FK)     | 5.6 ГБ                                         |
+| **notifications** | `id`                              | Clustering Key | 0 (включены Cassandra)                         |
+|                   | `user_id`                         | Partition key  | 0 (включены Cassandra)                         |
+|                   | `(user_id, created_at DESC) `     | Composite Key  | 0 (включены Cassandra)                         |
+| **sessions**      | `id`                              | PRIMARY KEY    | 6.2 ГБ                                         |
+|                   | `user_id`                         | B-Tree(FK)     | 6.2 ГБ                                         |
+| **cards**         | `id`                              | PRIMARY KEY    | 24 × 72 млн × 1.3 ≈ 2.25 ГБ                    |
+|                   | `user_id`                         | B-Tree         | 24 × 72 млн × 1.3 ≈ 2.25 ГБ                    |
+|                   | `account_id`                      | B-Tree         | 24 × 72 млн × 1.3 ≈ 2.25 ГБ                    |
+| **Итого**         |                                   |                | **~4 ТБ**                                      |
+
+- размер ключа — размер поля (например id = 16 байт)
+- pointer (указатель) ≈ 8 байт (в PostgreSQL)
+- overhead ≈ 1.2–1.5 (B-Tree структура)
 
 ## Денормализация
 
@@ -314,7 +319,9 @@ DAU была расчитана, как 20-40% пользователей.
 
 ## Шардирование и Резервирование
 
-- **Шардирование**: Используем `user_id` как основной ключ. Это гарантирует, что все данные одного пользователя лежат на одном узле, что позволяет делать быстрые ACID-транзакции внутри одного шардированного узла.
+- **Шардирование**
+  - `from_account_id` как ключ в таблице `transactions`.
+  - `user_id` как ключ в таблице `notifications`.
 - **Резервирование**:
   - PostgreSQL: Кворумная синхронная репликация(Quorum Synchronous Replication). Метод обеспечения высокой надежности данных, при котором транзакция считается успешной только после подтверждения ее записи мастером и кворумом (большинством) реплик, а не всеми узлами. Даже при падении мастера данные гарантированно сохранены на одной из реплик.
   - Cassandra: процесс создания снимков данных (snapshots) и инкрементальных копий для защиты от потери информации.
