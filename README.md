@@ -288,9 +288,9 @@ DAU была расчитана, как 20-40% пользователей.
 |                   | `(to_account, created_at DESC)  ` | Composite Key  | 32 × 33B × 1.3 ≈ 1.37 ТБ                       |
 | **credits**       | `id`                              | PRIMARY KEY    | 5.6 ГБ                                         |
 |                   | `user_id`                         | B-Tree(FK)     | 5.6 ГБ                                         |
-| **notifications** | `id`                              | Clustering Key | 0 (включены Cassandra)                         |
-|                   | `user_id`                         | Partition key  | 0 (включены Cassandra)                         |
-|                   | `(user_id, created_at DESC) `     | Composite Key  | 0 (включены Cassandra)                         |
+| **notifications** | `id`                              | Clustering Key | 60 ГБ                                          |
+|                   | `user_id`                         | Partition key  | 60 ГБ                                          |
+|                   | `(user_id, created_at DESC) `     | Composite Key  | 90 ГБ                                          |
 | **sessions**      | `id`                              | PRIMARY KEY    | 6.2 ГБ                                         |
 |                   | `user_id`                         | B-Tree(FK)     | 6.2 ГБ                                         |
 | **cards**         | `id`                              | PRIMARY KEY    | 24 × 72 млн × 1.3 ≈ 2.25 ГБ                    |
