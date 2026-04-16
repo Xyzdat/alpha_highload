@@ -373,45 +373,44 @@ DAU была расчитана, как 20-40% пользователей.
 
 ```mermaid
 graph TD
-    User((Пользователь)) --> Anycast[BGP Anycast + DDoS Protection]
-    Anycast --> DC1[Data Center 1: Москва]
-    Anycast --> DC2[Data Center 2: Подмосковье]
-    Anycast --> DC3[Data Center 3: Екатеринбург]
+    %% Глобальный уровень
+    User((Пользователь)) --> Anycast[BGP Anycast]
+    Anycast --> DC1[DC1: Москва]
+    Anycast --> DC2[DC2: Подмосковье]
+    Anycast --> DC3[DC3: Екатеринбург]
 
-    subgraph "Внутри дата-центра"
-        L4[L4 Balancer: F5 BIG-IP] --> L7[L7 Balancer: NGINX Cluster]
-        L7 --> Gateway[API Gateway]
+    %% Связь внешнего уровня с внутренним
+    DC1 & DC2 & DC3 --> L4
 
-        subgraph "Микросервисы"
-            AuthS[Auth Service]
-            AccountS[Account Service]
-            TransS[Transaction Service]
-            CreditS[Credit Service]
-            NotifS[Notification Service]
-        end
+    L4[L4 Balancer: F5 BIG-IP] --> L7[L7 Balancer: NGINX]
+    L7 --> Gateway[API Gateway]
 
-        Broker[[Message Broker: Kafka / RabbitMQ]]
-
-        subgraph "Data Storage"
-            Redis[(Redis Sentinel: Sessions)]
-            PostgresMaster[(PostgreSQL Master: Core Data)]
-            PostgresSlave[(PostgreSQL Slave)]
-            Cassandra[(Cassandra Cluster: Notifications)]
-            S3[(Object Storage: WAL-G/Backups)]
-        end
+    subgraph "Микросервисы"
+        AuthS[Auth Service]
+        AccountS[Account Service]
+        TransS[Transaction Service]
+        CreditS[Credit Service]
+        NotifS[Notification Service]
     end
 
+
+    subgraph "Хранилища данных"
+        Redis[(Redis: Sessions)]
+        PostgresMaster[(PostgreSQL: Core Data)]
+        PostgresSlave[(PostgreSQL Slave)]
+        Cassandra[(Cassandra: Notifications)]
+        S3[(Object Storage: WAL-G/Backups)]
+    end
+  %% Потоки данных
     Gateway --> AuthS & AccountS & TransS & CreditS & NotifS
     AuthS <--> Redis
     AccountS <--> PostgresMaster
     TransS <--> PostgresMaster
-    TransS -- "Async Event" --> Broker
-    Broker --> NotifS
     NotifS <--> Cassandra
     PostgresMaster --> PostgresSlave
     PostgresMaster --> S3
-
-    NotifS --> Push[Firebase/APNs]
+ %% Внешние интеграции
+    NotifS --> Push[push notification]
     TransS --> SBP[НСПК / СБП]
 ```
 
