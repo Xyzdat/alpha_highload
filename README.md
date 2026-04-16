@@ -260,7 +260,7 @@ DAU была расчитана, как 20-40% пользователей.
 | ------------- | ---------- | ------------------ | ------------------ |
 | users         | PostgreSQL | нет                | Master-Slave       |
 | accounts      | PostgreSQL | нет                | Master-Slave       |
-| transactions  | PostgreSQL | `user_id`          | Master-Slave       |
+| transactions  | PostgreSQL | `sender_user_id`   | Master-Slave       |
 | credits       | PostgreSQL | нет                | Master-Slave       |
 | notifications | Cassandra  | `user_id`          | Replication Factor |
 | sessions      | Redis      | нет                | Master-Slave       |
@@ -284,7 +284,7 @@ DAU была расчитана, как 20-40% пользователей.
 | **accounts**      | `id`                                 | PRIMARY KEY    | 24 × 72M × 1.3 ≈ 2.2 ГБ                        |
 |                   | `user_id`                            | B-Tree(FK)     | 24 × 72M × 1.3 ≈ 2.2 ГБ                        |
 | **transactions**  | `id`                                 | PRIMARY KEY    | 24 × 33B × 1.3 ≈ 1 ТБ                          |
-|                   | `(user_id, bucket,created_at  DESC)` | Composite Key  | 32 × 33B × 1.3 ≈ 1.37 ТБ                       |
+|                   | `(sender_user_id, created_at  DESC)` | Composite Key  | 32 × 33B × 1.3 ≈ 1.37 ТБ                       |
 | **credits**       | `id`                                 | PRIMARY KEY    | 5.6 ГБ                                         |
 |                   | `user_id`                            | B-Tree(FK)     | 5.6 ГБ                                         |
 | **notifications** | `id`                                 | Clustering Key | 60 ГБ                                          |
@@ -319,7 +319,7 @@ DAU была расчитана, как 20-40% пользователей.
 ## Шардирование и Резервирование
 
 - **Шардирование**
-  - шардируем по `user_id` как единый ключ для шардинга `sender_user_id` и `receiver_user_id` в таблице `transactions`.
+  - шардируем по `sender_user_id` в таблице `transactions`.
   - `user_id` как ключ в таблице `notifications`.
 - **Резервирование**:
   - PostgreSQL: Кворумная синхронная репликация(Quorum Synchronous Replication). Метод обеспечения высокой надежности данных, при котором транзакция считается успешной только после подтверждения ее записи мастером и кворумом (большинством) реплик, а не всеми узлами. Даже при падении мастера данные гарантированно сохранены на одной из реплик.
@@ -339,20 +339,81 @@ DAU была расчитана, как 20-40% пользователей.
 
 # Технологии
 
-| технология     | область примерения               | мотивационная часть                                                              |
-| -------------- | -------------------------------- | -------------------------------------------------------------------------------- |
-| PostgreSQL     | Основная база данных             | Обеспечение ACID транзакций, строгая консистенция                                |
-| Cassandra      | Хранение уведомлений             | Эффективно работает с большими объемами данных (80+ ТБ), высокая скорость записи |
-| Redis          | Кэш и уведомления                | Подходит для хранения сессий и ускорения доступа к данным                        |
-| NGINX          | L7 балансировка нагрузки         | Обработка запросов на сервере, SSL терминация                                    |
-| F5 BIG-IP      | L4 балансировка нагрузки         | Расперделение траника запросов на L7 балансировщики                              |
-| PgBouncer      | Пул соединений PostgreSQL        | Снижает нагрузку на БД за счет переиспользования соединений                      |
-| WAL-G          | Резервное копирование PostgreSQL | Point-in-time recovery через WAL-логи                                            |
-| Redis Sentinel | Отказоустойчивость Redis         | Автоматический failover и мониторинг                                             |
-| gocql          | Клиент для Cassandra             | Эффективная работа с распределенной БД                                           |
-| go-redis       | Клиент для Redis                 | Оптимизированная работа с Redis, поддержка пулов                                 |
-| pgx            | Клиент PostgreSQL                | Высокопроизводительный драйвер                                                   |
-| BGP Anycast    | Глобальная балансировка          | маршрутизация запросов между ДЦ                                                  |
+| **Технология**        | **Область примерения**           | **Мотивационная часть**                                                          |
+| --------------------- | -------------------------------- | -------------------------------------------------------------------------------- |
+| **Backend**           |                                  |                                                                                  |
+| Go                    | Основной язык бэка               | Высокая производительность, эффективная работа с многопоточностью                |
+| gRPC / Protobuf       | Межсервисное взаимодействие      | Типизированный, быстрый и бинарный протокол                                      |
+| **Frontend & Mobile** |                                  |                                                                                  |
+| React / TypeScript    | Основная технология фронта       | Более быстрая разработка, компонентный подход                                    |
+| Swift (iOS)           | Мобильное приложение             | Разработка для IOS                                                               |
+| Kotlin (Android)      | Мобильное приложение             | Разарботка для Android                                                           |
+| **Хранение данных**   |                                  |                                                                                  |
+| PostgreSQL            | Основная база данных             | Обеспечение ACID транзакций, строгая консистенция                                |
+| Cassandra             | Хранение уведомлений             | Эффективно работает с большими объемами данных (80+ ТБ), высокая скорость записи |
+| Redis                 | Кэш и уведомления                | Подходит для хранения сессий и ускорения доступа к данным                        |
+| **Инфраструктура**    |                                  |                                                                                  |
+| Kubernetes            | Оркестрация контейнеров          | Автоматическое масштабирование сервисов, управление деплоем в трех дата-центрах. |
+| Prometheus & Grafana  | Мониторинг                       | Сбор метрик в реальном времени и визуализация состояния системы.                 |
+| ELK / EFK Stack       | Логирование                      | Централизованный сбор и поиск по логам для расследования инцидентов.             |
+| **Балансировка**      |                                  |                                                                                  |
+| NGINX                 | L7 балансировка нагрузки         | Обработка запросов на сервере, SSL терминация                                    |
+| F5 BIG-IP             | L4 балансировка нагрузки         | Расперделение траника запросов на L7 балансировщики                              |
+| BGP Anycast           | Глобальная балансировка          | маршрутизация запросов между ДЦ                                                  |
+| **Библиотеки**        |                                  |                                                                                  |
+| gocql                 | Клиент для Cassandra             | Эффективная работа с распределенной БД                                           |
+| go-redis              | Клиент для Redis                 | Оптимизированная работа с Redis, поддержка пулов                                 |
+| pgx                   | Клиент PostgreSQL                | Высокопроизводительный драйвер                                                   |
+| PgBouncer             | Пул соединений PostgreSQL        | Снижает нагрузку на БД за счет переиспользования соединений                      |
+| **Резервация**        |                                  |                                                                                  |
+| WAL-G                 | Резервное копирование PostgreSQL | Point-in-time recovery через WAL-логи                                            |
+| Redis Sentinel        | Отказоустойчивость Redis         | Автоматический failover и мониторинг                                             |
+
+# Схема проекта
+
+```mermaid
+graph TD
+    User((Пользователь)) --> Anycast[BGP Anycast + DDoS Protection]
+    Anycast --> DC1[Data Center 1: Москва]
+    Anycast --> DC2[Data Center 2: Подмосковье]
+    Anycast --> DC3[Data Center 3: Екатеринбург]
+
+    subgraph "Внутри дата-центра"
+        L4[L4 Balancer: F5 BIG-IP] --> L7[L7 Balancer: NGINX Cluster]
+        L7 --> Gateway[API Gateway]
+
+        subgraph "Микросервисы"
+            AuthS[Auth Service]
+            AccountS[Account Service]
+            TransS[Transaction Service]
+            CreditS[Credit Service]
+            NotifS[Notification Service]
+        end
+
+        Broker[[Message Broker: Kafka / RabbitMQ]]
+
+        subgraph "Data Storage"
+            Redis[(Redis Sentinel: Sessions)]
+            PostgresMaster[(PostgreSQL Master: Core Data)]
+            PostgresSlave[(PostgreSQL Slave)]
+            Cassandra[(Cassandra Cluster: Notifications)]
+            S3[(Object Storage: WAL-G/Backups)]
+        end
+    end
+
+    Gateway --> AuthS & AccountS & TransS & CreditS & NotifS
+    AuthS <--> Redis
+    AccountS <--> PostgresMaster
+    TransS <--> PostgresMaster
+    TransS -- "Async Event" --> Broker
+    Broker --> NotifS
+    NotifS <--> Cassandra
+    PostgresMaster --> PostgresSlave
+    PostgresMaster --> S3
+
+    NotifS --> Push[Firebase/APNs]
+    TransS --> SBP[НСПК / СБП]
+```
 
 # Использованные источники
 
