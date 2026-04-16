@@ -403,15 +403,20 @@ graph TD
     end
   %% Потоки данных
     Gateway --> AuthS & AccountS & TransS & CreditS & NotifS
-    AuthS <--> Redis
-    AccountS <--> PostgresMaster
-    TransS <--> PostgresMaster
-    NotifS <--> Cassandra
-    PostgresMaster --> PostgresSlave
-    PostgresMaster --> S3
+    AuthS <--> |r/w| Redis
+    AccountS <--> |r/w| PostgresMaster
+    TransS <--> |r/w| PostgresMaster
+    NotifS <--> |r/w| Cassandra
+    CreditS <--> |r/w| PostgresMaster
+    PostgresMaster --> |replication| PostgresSlave
+    PostgresMaster --> |w|S3
  %% Внешние интеграции
     NotifS --> Push[push notification]
-    TransS --> SBP[НСПК / СБП]
+    TransS --> |r/w|SBP[НСПК / СБП]
+
+    linkStyle 9,10,11,12,13 stroke:#00d4ff,stroke-width:3px;
+    linkStyle 16,17,18,14,15,21,22 stroke:#f39c12,stroke-width:3px;
+    linkStyle 19,20 stroke:#2ecc71,stroke-width:2px;
 ```
 
 # Использованные источники
