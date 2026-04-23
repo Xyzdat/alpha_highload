@@ -374,51 +374,101 @@ DAU была расчитана, как 20-40% пользователей.
 
 ```mermaid
 graph TD
-    %% Глобальный уровень
-    User((Пользователь)) --> Anycast[BGP Anycast]
-    Anycast --> DC1[DC1: Москва]
-    Anycast --> DC2[DC2: Подмосковье]
-    Anycast --> DC3[DC3: Екатеринбург]
+  User((Пользователь)) -->Anycast[BGP Anycast]
+  Anycast --> DC1[DC1: Москва]
+  Anycast --> DC2[DC2: Подмосковье]
+  Anycast --> DC3[DC3: Екатеринбург]
 
-    %% Связь внешнего уровня с внутренним
-    DC1 & DC2 & DC3 --> L4
+  DC1 & DC2 & DC3 --> L4[L4 Balancer: F5 BIG-IP]
+  L4 --> L7[L7 Balancer: NGINX]
 
-    L4[L4 Balancer: F5 BIG-IP] --> L7[L7 Balancer: NGINX]
-    L7 --> Gateway[API Gateway]
+  WebGW[Web API Gateway]
+  MobGW[Mobile API Gateway]
 
-    subgraph "Микросервисы"
-        AuthS[Auth Service]
-        AccountS[Account Service]
-        TransS[Transaction Service]
-        CreditS[Credit Service]
-        NotifS[Notification Service]
-    end
+  L7 --> WebGW
+  L7 --> MobGW
 
+  %% Мониторинг и логирование
+  subgraph "Мониторинг метрик"
+      Prometheus[Prometheus]
+      Grafana[Grafana]
+      ELK[ELK Stack]
+  end
 
-    subgraph "Хранилища данных"
-        Redis[(Redis: Sessions)]
-        PostgresMaster[(PostgreSQL: Core Data)]
-        PostgresSlave[(PostgreSQL Slave)]
-        Cassandra[(Cassandra: Notifications)]
-        S3[(Object Storage: WAL-G/Backups)]
-    end
-  %% Потоки данных
-    Gateway --> AuthS & AccountS & TransS & CreditS & NotifS
-    AuthS <--> |r/w| Redis
-    AccountS <--> |r/w| PostgresMaster
-    TransS <--> |r/w| PostgresMaster
-    NotifS <--> |r/w| Cassandra
-    CreditS <--> |r/w| PostgresMaster
-    PostgresMaster --> |replication| PostgresSlave
-    PostgresMaster --> |w|S3
- %% Внешние интеграции
-    NotifS --> Push[push notification]
-    TransS --> |r/w|SBP[НСПК / СБП]
+  %% Микросервисы
+  subgraph "Микросервисы"
+      AuthS[Auth Service]
+      AccountS[Account Service]
+      TransS[Transaction Service]
+      CreditS[Credit Service]
+      NotifS[Notification Service]
+      CreditWorker[Credit Offline Worker]
+  end
 
-    linkStyle 9,10,11,12,13 stroke:#00d4ff,stroke-width:3px;
-    linkStyle 16,17,18,14,15,21,22 stroke:#f39c12,stroke-width:3px;
-    linkStyle 19,20 stroke:#2ecc71,stroke-width:2px;
+  WebGW & MobGW -->|sync| AuthS & AccountS & TransS & CreditS
+
+  %% Базы данных
+  subgraph "Базы данных"
+    AuthDB[(PostgreSQL: Auth/Users)]
+    AccountDB[(PostgreSQL: Accounts)]
+    TransDB[(PostgreSQL: Transactions)]
+    CreditDB[(PostgreSQL: Credits)]
+    RegistryDB[(PostgreSQL: Credit Registry)]
+    Cassandra[(Cassandra: Notifications)]
+  end
+
+  %% Очереди и Кэш
+  subgraph "Очереди и Кэш"
+    RedisTaskQueue[(Redis: Task Queues)]
+    SessionDB[(Redis: Sessions)]
+  end
+
+  %% Связи сервисов с их БД
+  AuthS -->|sync| AuthDB
+  AuthS -->|sync| SessionDB
+  AccountS -->|sync| AccountDB
+  TransS -->|sync| TransDB
+  CreditS -->|sync: new credit| CreditDB
+  CreditS -->|sync: check story| RegistryDB
+
+  %% Кредитный реестр через Redis Queue
+  CreditS -->|async| RedisTaskQueue
+  RedisTaskQueue -.->|async polling| CreditWorker
+  CreditWorker -->|sync| RegistryDB
+  CreditWorker -->|sync| BKI[Внешние Бюро Кредитных Историй]
+
+  %% Асинхронные уведомления через Redis
+  TransS & CreditS & AccountS -->|async| RedisTaskQueue
+  RedisTaskQueue -.->|async polling| NotifS
+  NotifS -->|sync| Cassandra
+
+  %% Внешние интеграции
+  NotifS -->|async| Push[Push Notification Service]
+  TransS -->|sync| SBP[НСПК / СБП]
+
+  %% Сбор данных (пунктиром)
+  BusinessLogic -.->|metrics/logs| Prometheus
+  BusinessLogic -.->|metrics/logs| ELK
+  PersistenceLayer -.->|metrics/logs| Prometheus
+  Prometheus -->|sync| Grafana
+
+  %% Стилизация стрелок
+  linkStyle 23,13,16,17,18,19,20,21,22,24,25,26,27,29,32,33 stroke:#00d4ff,stroke-width:2px;
+  linkStyle 25,28,30,31,33,34 stroke:#f39c12,stroke-width:2px;
 ```
+
+# Обеспечение надёжности
+
+| Компонент             | Уровень        | Метод обеспечения             | Описание механизма                                                                                                                  |
+| :-------------------- | :------------- | :---------------------------- | :---------------------------------------------------------------------------------------------------------------------------------- |
+| **Резерв**            | Инфраструктура | **Active-Active-Active**      | 3 независимых ДЦ. При отказе одного ДЦ нагрузка перераспределяется без прерывания обслуживания.                                     |
+| **База данных**       | Данные         | **Quorum Sync Replication**   | Транзакция подтверждается только после записи на Мастер и Кворум реплик. Гарантия **RPO=0**.                                        |
+| **Переключение**      | Операционный   | **Automatic Failover Policy** | Использование Patroni (PostgreSQL) и Sentinel (Redis) для автоматического обнаружения сбоя мастера и выбора нового за <30 сек.      |
+| **Завершение работы** | Прикладной     | **Graceful Shutdown**         | При деплое или масштабировании K8s отправляет SIGTERM. Сервис завершает текущие транзакции и только потом завершает работу.         |
+| **Защита от сбоя**    | Прикладной     | **Graceful Degradation**      | При сбое второстепенных систем (например, "Кредитные предложения") основная функциональность (Баланс, Переводы) остается доступной. |
+| **Изоляция сбоев**    | Интеграционный | **Circuit Breaker**           | "Предохранитель" разрывает связь с деградирующим сервисом, предотвращая каскадное падение всей системы.                             |
+| **Трафик**            | Сетевой        | **BGP Anycast / L4-L7**       | Многоуровневая балансировка и очистка трафика. Резервирование узлов по схеме N+1 и N\*2.                                            |
+| **Восстановление**    | Данные         | **Point-in-Time Recovery**    | Ежедневные бэкапы и непрерывная трансляция WAL-логов в S3 для восстановления на любой момент времени.                               |
 
 # Использованные источники
 
