@@ -466,6 +466,107 @@ graph TD
 | **Трафик**            | Сетевой        | **BGP Anycast / L4-L7**       | Многоуровневая балансировка и очистка трафика. Резервирование узлов по схеме N+1 и N\*2.                                            |
 | **Восстановление**    | Данные         | **Point-in-Time Recovery**    | Ежедневные бэкапы и непрерывная трансляция WAL-логов в S3 для восстановления на любой момент времени.                               |
 
+## Асинхронные паттерны
+
+1. **Transactional Outbox (Синхронизация данных):**
+   - **Проблема:** Если сервис сначала запишет транзакцию в БД, а потом попытается отправить событие в Kafka, и в этот момент сеть пропадёт — данные в базе будут, а уведомление не уйдет. Для банка это потеря консистентности.
+   - **Решение:** Мы пишем платеж и событие в одну базу PostgreSQL в рамках одной ACID-транзакции. Специальный воркер (Relay) подхватывает это событие и гарантированно доставляет в Kafka.
+
+2. **Choreography-based Saga (Синхронизация данных):**
+   - **Проблема:** В распределенной системе нельзя сделать «один большой коммит» на два разных сервиса (например, списать деньги в AccountS и создать запись в TransS). 2-фазный коммит (2PC) слишком медленный.
+   - **Решение:** Используем Сагу.
+
+3. **CQRS (Управление данных):**
+   - **Проблема:** Запросы на «Просмотр истории за год» (тяжелый SELECT) и «Перевод денег» (быстрый UPDATE) делают сильную нагрузку.
+   - **Решение:** Разделение путей.
+
+```mermaid
+graph TD
+User((Пользователь)) -->Anycast[BGP Anycast]
+Anycast --> DC1[DC1: Москва]
+Anycast --> DC2[DC2: Подмосковье]
+Anycast --> DC3[DC3: Екатеринбург]
+
+DC1 & DC2 & DC3 --> L4[L4 Balancer: F5 BIG-IP]
+L4 --> L7[L7 Balancer: NGINX]
+
+WebGW[Web API Gateway]
+MobGW[Mobile API Gateway]
+
+L7 --> WebGW
+L7 --> MobGW
+
+%% Микросервисы
+subgraph "Микросервисы"
+    AuthS[Auth Service]
+    AccountS[Account Service]
+    TransS[Transaction Service]
+    CreditS[Credit Service]
+    NotifS[Notification Service]
+    CreditWorker[Credit Offline Worker]
+end
+
+WebGW & MobGW -->|sync| AuthS & AccountS & TransS & CreditS
+
+%% Базы данных
+subgraph "Базы данных"
+  AuthDB[(PostgreSQL: Auth/Users)]
+  AccountDB[(PostgreSQL: Accounts)]
+  TransDB[(PostgreSQL: Transactions)]
+  CreditDB[(PostgreSQL: Credits)]
+  RegistryDB[(PostgreSQL: Credit Registry)]
+  Cassandra[(Cassandra: Notifications)]
+  SessionDB[(Redis: Sessions)]
+end
+
+subgraph "Pattern: Transactional Outbox"
+  TransS --> TransDB
+  TransDB --> Relay[Relay/CDC]
+end
+
+Kafka[[Apache Kafka: Event Streaming]]
+
+subgraph "Pattern: Saga"
+  Relay --> Kafka
+  Kafka --> AccountS
+  AccountS --> Kafka
+  Kafka -->|Update Status| TransS
+end
+
+subgraph "CQRS"
+  Kafka -->|Async Sync| ReadDB[(Read DB: Elastic/Postgres)]
+  WebGW & MobGW --> HistoryS[History Service]
+  HistoryS --> ReadDB
+end
+
+%% Связи сервисов с их БД
+AuthS -->|sync| AuthDB
+AuthS -->|sync| SessionDB
+AccountS -->|sync| AccountDB
+TransS -->|sync| TransDB
+CreditS -->|sync: new credit| CreditDB
+CreditS -->|sync: check story| RegistryDB
+
+%% Кредитный реестр через Redis Queue
+CreditS -->|async| Kafka
+Kafka -.->|async polling| CreditWorker
+CreditWorker -->|sync| RegistryDB
+CreditWorker -->|sync| BKI[Внешние Бюро Кредитных Историй]
+
+%% Асинхронные уведомления через Redis
+TransS & CreditS & AccountS -->|async| Kafka
+Kafka -.->|async polling| NotifS
+NotifS -->|sync| Cassandra
+
+%% Внешние интеграции
+NotifS -->|async| Push[Push Notification Service]
+TransS -->|sync| SBP[НСПК / СБП]
+
+%% Стилизация стрелок
+linkStyle 23,13,16,17,18,19,20,21,22,24,25,26,27,29,32,33 stroke:#00d4ff,stroke-width:2px;
+linkStyle 25,28,30,31,33,34 stroke:#f39c12,stroke-width:2px;
+```
+
 ### 1. Graceful Shutdown
 
 В высоконагруженной банковской системе недопустимо обрывать транзакции или терять сообщения из Kafka при деплое или перезагрузке подов.
