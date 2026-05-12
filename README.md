@@ -483,18 +483,21 @@ graph TD
 ```mermaid
 graph TD
 User((Пользователь)) -->Anycast[BGP Anycast]
-Anycast --> DC1[DC1: Москва]
-Anycast --> DC2[DC2: Подмосковье]
-Anycast --> DC3[DC3: Екатеринбург]
 
-DC1 & DC2 & DC3 --> L4[L4 Balancer: F5 BIG-IP]
-L4 --> L7[L7 Balancer: NGINX]
+subgraph "Сеть"
+  Anycast --> DC1[DC1: Москва]
+  Anycast --> DC2[DC2: Подмосковье]
+  Anycast --> DC3[DC3: Екатеринбург]
 
-WebGW[Web API Gateway]
-MobGW[Mobile API Gateway]
+  DC1 & DC2 & DC3 --> L4[L4 Balancer: F5 BIG-IP]
+  L4 --> L7[L7 Balancer: NGINX]
 
-L7 --> WebGW
-L7 --> MobGW
+  WebGW[Web API Gateway]
+  MobGW[Mobile API Gateway]
+
+  L7 --> WebGW
+  L7 --> MobGW
+end
 
 %% Микросервисы
 subgraph "Микросервисы"
@@ -525,17 +528,19 @@ subgraph "Pattern: Transactional Outbox"
 end
 
 Kafka[[Apache Kafka: Event Streaming]]
+ReadDB[(Read DB: Elastic/Postgres)]
+HistoryS[History Service]
 
 subgraph "Pattern: Saga"
   Relay --> Kafka
-  Kafka --> AccountS
+  Kafka <--> AccountS
   AccountS --> Kafka
   Kafka -->|Update Status| TransS
 end
 
 subgraph "CQRS"
-  Kafka -->|Async Sync| ReadDB[(Read DB: Elastic/Postgres)]
-  WebGW & MobGW --> HistoryS[History Service]
+  Kafka -->|Async Sync| ReadDB
+  WebGW & MobGW --> HistoryS
   HistoryS --> ReadDB
 end
 
@@ -620,28 +625,23 @@ Stateful-компоненты (PostgreSQL, Cassandra, Redis) — на выдел
 Количество ядер CPU для микросервисов рассчитывается по формуле:
 `Количество ядер CPU = Пиковый RPS / Норма нагрузки на 1 ядро`
 
-### Нормы производительности
-
-| Характер нагрузки                | Норма (RPS на 1 ядро) |
-| :------------------------------- | :-------------------: |
-| **Auth Service** (JWT, Redis)    |         4 000         |
-| **Account Service** (Read-heavy) |         2 500         |
-| **Transaction Service** (ACID)   |         1 000         |
-| **Notification Service** (Kafka) |         6 000         |
-
 ### Сводная таблица ресурсов (на DC1)
 
-| Сервис                  | Нагрузка (RPS) |     Расчет     | CPU (ядер) |    RAM    |
-| :---------------------- | :------------: | :------------: | :--------: | :-------: |
-| **auth-service**        |     10 000     | 10 000 / 4 000 |     4      |   8 ГБ    |
-| **account-service**     |     15 000     | 15 000 / 2 500 |     6      |   12 ГБ   |
-| **transaction-service** |     5 000      | 5 000 / 1 000  |     5      |   10 ГБ   |
-| **notif-service**       |     8 000      | 8 000 / 6 000  |     2      |   4 ГБ    |
-| **Итого**               |   **38 000**   |                |   **17**   | **34 ГБ** |
+`Overhead` = 1.3% - Коэффициент запаса
+
+| Сервис                  |   RPS   |       Норма        |  Расчет  |     CPU (ядер)      |            RAM            |
+| :---------------------- | :-----: | :----------------: | :------: | :-----------------: | :-----------------------: |
+| **auth-service**        |   90    | 400 (JWT + Redis)  | 90 / 400 |          1          |           8 ГБ            |
+| **account-service**     |   90    | 300 (Read from DB) | 90 / 300 |          1          |           8 ГБ            |
+| **transaction-service** |   90    | 100 (ACID, Locks)  | 90 / 100 |          1          |           8 ГБ            |
+| **notif-service**       |   90    |    500 (Async)     | 90 / 500 |          1          |           4 ГБ            |
+| **Итого**               | **360** |                    |          | **4\*Overhead = 6** | **28 \*Overhead = 36 ГБ** |
 
 ## Конфигурации и стоимость
 
 Цены основаны на тарифах **Selectel Bare Metal** и выделенных облачных ресурсов.
+
+### Аренда
 
 | Тип сервера        | Конфигурация (Пример: Selectel)    | Кол-во (всего) | Аренда (мес/ед) | Итого в месяц |
 | :----------------- | :--------------------------------- | :------------: | :-------------: | :-----------: |
@@ -653,6 +653,48 @@ Stateful-компоненты (PostgreSQL, Cassandra, Redis) — на выдел
 | **db-redis**       | Xeon 4210R (10c), 256GB RAM        |       9        |      $200       |    $1 800     |
 | **kafka-node**     | Xeon Silver 4314, 128GB, 4xSSD 2TB |       9        |      $280       |    $2 520     |
 | **Итого**          |                                    |     **81**     |                 |  **$23 370**  |
+
+### Расчёт покупки
+
+| Тип сервера              | Конфигурация (Пример: Selectel)        | Кол-во (всего) | Аренда (мес/ед) | Итого в месяц |
+| :----------------------- | :------------------------------------- | :------------: | :-------------: | :-----------: |
+| **kubenode** (App)       | 2×EPYC 7443P (24c), 128GB RAM          |       12       |     $9 000      |   $108 000    |
+| **lvs-l4**               | Xeon E-2334 (4c), 25GbE NIC            |       6        |     $2 500      |    $15 000    |
+| **nginx-l7**             | Xeon Silver 4310 (12c), 25GbE NIC      |       6        |     $4 000      |    $24 000    |
+| **db-postgres**          | EPYC 7543 (32c), 256GB, 2xNVMe 2TB     |       15       |     $11 000     |   $165 000    |
+| **db-cassandra**         | EPYC 7282 (16c), 128GB, 4xNVMe 4TB     |       24       |     $10 500     |   $252 000    |
+| **db-redis**             | Xeon 4210R (10c), 256GB RAM            |       9        |     $6 000      |    $54 000    |
+| **kafka-node**           | Xeon Silver 4314, 128GB, 4xSSD 2TB     |       9        |     $7 000      |    $63 000    |
+| **Сетевое оборудование** | Switches 25GbE (6 шт) + Routers (3 шт) |       -        |        -        |    $60 000    |
+| **Итого**                |                                        |     **81**     |                 | **$741 000**  |
+
+### Расчёт содержания
+
+| Статья расхода     | Расчёт                                   | Итого в месяц |
+| :----------------- | :--------------------------------------- | :-----------: |
+| **Аренда стоек**   | 3 стойки (Москва/Екб) × $1 200           |    $3 600     |
+| **Электроэнергия** | 40 кВт × 24ч × 30дн × $0.09/кВтч         |    $2 600     |
+| **Каналы связиы**  | 3 ДЦ × 10Gbps (L3 VPN + Internet)        |    $1 500     |
+| **Обслуживание**   | Сменный персонал (выезды, замена дисков) |    $2 000     |
+| **З/П инженеров**  | 2 SRE/DC-инженера (на поддержку железа)  |    $5 000     |
+| **Итого**          |                                          |  **$14 700**  |
+
+## Сравнение моделей
+
+Рассчитаем общую стоимость владения на горизонте 5 лет.
+
+**Вариант А: Аренда**
+
+- Ежемесячно: $23 370
+- За 5 лет: $1 402 200
+
+**Вариант B: Покупка**
+
+- Разово: $741 000
+- За 3 лет содержания: $882 000
+- Итого: $1 623 000
+
+**Вывод**: аренда будет выгодней.
 
 ## Аллокация в Kubernetes
 
